@@ -1,0 +1,114 @@
+units metal
+dimension 3
+boundary p p s
+atom_style atomic
+
+
+lattice diamond 3.566858
+region whole block 0 500 0 500 0 600 units box
+create_box 2 whole
+variable LZ equal lz
+variable LZ_initial equal ${LZ}
+region sample block 0 500 0 500 0 519 units box
+#region indenter sphere 100 100 120 20 units box
+
+region side1 plane 250 250 520 1 0 2.174 side in units box
+region side2 plane 250 250 520 -0.5 0.866 2.174 side in units box
+region side3 plane 250 250 520 -0.5 -0.866 2.174 side in units box
+
+
+region indenter_handle block 0 500 0 500 520 600 units box
+
+region indenter intersect 4 side1 side2 side3 indenter_handle units box
+
+#fill the indenter
+create_atoms 1 region indenter
+mass 1 12
+
+#fill the sample with Fe atoms
+variable latConst equal 2.856
+lattice bcc ${latConst}
+create_atoms 2 region sample
+mass 2 55.845
+
+shell mkdir ./datafiles
+write_data ./datafiles/initialconfig.dat
+
+group sample region sample
+group indenter region indenter
+
+#minimization of Fe crytal
+pair_style eam/alloy
+pair_coeff * * FeCuNi.eam.alloy Fe Fe
+compute PE_atom_Fe sample pe/atom
+compute PE_Fe all reduce sum c_PE_atom_Fe
+
+min_style cg
+min_modify line quadratic
+thermo 50
+#thermo_style custom step c_PE_Fe pxx pyy pzz pxy pxz pyz fmax
+#minimize 1e-10 1e-12 5000 25000
+print "Energy of Fe crystal: c_PE_Fe"
+
+#minimization of diamond indenter
+pair_style bop
+pair_coeff * * CCu_v2.bop.alloy.txt C C
+comm_modify cutoff 11.3
+compute PE_atom_dia all pe/atom
+compute PE_dia all reduce sum c_PE_atom_dia
+
+min_style cg
+min_modify line quadratic
+thermo 50
+thermo_style custom step c_PE_dia pxx pyy pzz pxy pxz pyz fmax
+minimize 1e-10 1e-12 5000 25000
+print "Energy of diamond indenter: c_PE_dia"
+
+write_data ./datafiles/before_indentation_0K.dat
+
+variable indenter_vel equal -1 #velocity is -100 m/s
+
+
+fix 1 indenter move linear 0.0 0.0 ${indenter_vel} units box
+compute 1 indenter com
+compute 2 sample reduce sum fz
+variable fmax equal c_2
+thermo		100
+thermo_style custom step temp v_fmax pe
+
+#run for 60 ps to obtain hmax of 6 nm depth
+reset_timestep 0
+timestep 0.001
+dump 3 all custom 10 ./datafiles/indenting.*.dump id type x y z vx vy vz fx fy fz
+run 60000
+
+variable fmaxb4release equal (${fmax}*1.6)/1000000
+variable LZ_final equal ${LZ}
+variable hmax equal (${LZ_initial}-${LZ_final})/10
+print "Fmax after indentation is ${fmaxb4release} mN"
+print "Indentation depth is ${hmax} nm"
+write_data ./datafiles/indentation_0K_${fmaxb4release}mN_${hmax}nm.dat
+write_restart ./datafiles/indentation_0K_${fmaxb4release}mN_${hmax}nm.rest
+unfix 1
+
+variable indenter_back equal 1
+
+fix 2 indenter move linear 0.0 0.0 ${indenter_back} units box
+thermo		100
+thermo_style custom step temp v_fmax pe fmax
+
+#run for 60 ps to obtain hmax of 6 nm up
+reset_timestep 0
+timestep 0.001
+dump 4 all custom 10 ./datafiles/indenterremoving.*.dump id type x y z vx vy vz fx fy fz
+run 60000
+thermo 50
+thermo_style custom step c_PE_dia pxx pyy pzz pxy pxz pyz v_fmax fmax
+minimize 1e-10 1e-12 5000 25000
+variable fmaxafterrelease equal (${fmax}*1.6)/1000000
+variable LZ_final_relax equal ${LZ}
+variable hc equal (${LZ_initial}-${LZ_final_relax})/10
+print "Fmax after release of indenter is ${fmaxafterrelease} mN"
+print "Indentation depth after release of indenter is ${hc} nm"
+write_data ./datafiles/after_indentationrelease_0K_${fmaxafterrelease}mN_${hc}nm.dat
+unfix 2
